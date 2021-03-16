@@ -63,6 +63,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Framing.cs" />
     <Compile Include="Listener.cs" />
     <Compile Include="ProjectInstaller.cs">
       <SubType>Component</SubType>
