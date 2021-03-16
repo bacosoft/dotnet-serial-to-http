@@ -33,5 +33,12 @@ namespace SerialToHttpPoC
                 listener.Stop();
             }
         }
+
+        internal void TestStartupAndStop(string[] args)
+        {
+            this.OnStart(args);
+            Console.ReadLine();
+            this.OnStop();
+        }
     }
 }
