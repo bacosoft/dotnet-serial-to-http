@@ -5,11 +5,11 @@ using System.Runtime.InteropServices;
 // La información general de un ensamblado se controla mediante el siguiente 
 // conjunto de atributos. Cambie estos valores de atributo para modificar la información
 // asociada con un ensamblado.
-[assembly: AssemblyTitle("SerialToHttpPoC")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyTitle("Serial port To HTTP service")]
+[assembly: AssemblyDescription("Exposes serial port through HTTP")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("SerialToHttpPoC")]
+[assembly: AssemblyCompany("Bacosoft")]
+[assembly: AssemblyProduct("SerialToHttp")]
 [assembly: AssemblyCopyright("Copyright ©  2021")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]

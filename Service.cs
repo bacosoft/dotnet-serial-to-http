@@ -5,11 +5,12 @@ using System.Data;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.ServiceProcess;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace SerialToHttpPoC
+namespace SerialToHttp
 {
     public partial class Service : ServiceBase
     {
@@ -37,6 +38,7 @@ namespace SerialToHttpPoC
         internal void TestStartupAndStop(string[] args)
         {
             this.OnStart(args);
+            System.Console.WriteLine("Press enter to stop the listener");
             Console.ReadLine();
             this.OnStop();
         }

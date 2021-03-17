@@ -1,5 +1,5 @@
 ﻿
-namespace SerialToHttpPoC
+namespace SerialToHttp
 {
     partial class Service
     {

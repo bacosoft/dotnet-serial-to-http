@@ -5,15 +5,19 @@ using System.IO.Ports;
 using System.Net;
 using System.Threading;
 
-namespace SerialToHttpPoC
+namespace SerialToHttp
 {
 	public class Listener
 	{
 		private const string URL_PREFIX_KEY = "urlPrefix";
 		private const string DEFAULT_URL_PREFIX = "http://localhost:8080/serialToHttp/";
 
-		private const string PORT_NAME_KEY = "portName";
-		private const string DEFAULT_PORT_NAME = "COM4";
+        private const string TEST_PORT_NAME = "test";
+        private const string TEST_RESPONSE_KEY = "testResponse";
+        private const string DEFAULT_TEST_RESPONSE = "test";
+
+        private const string PORT_NAME_KEY = "portName";
+		private const string DEFAULT_PORT_NAME = TEST_PORT_NAME;
 		private const string BAUD_RATE_KEY = "baudRate";
 		private const string PARITY_KEY = "parity";
 		private const string DATA_BITS_KEY = "dataBits";
@@ -25,24 +29,30 @@ namespace SerialToHttpPoC
 
 		private const string HEADER_KEY = "header";
 		private const string DEFAULT_HEADER = "[";
-		private const string END_KEY = "end";
-		private const string DEFAULT_END = "]";
+		private const string TERMINATOR_KEY = "terminator";
+		private const string DEFAULT_TERMINATOR = "]";
+
+        private const string HEX_ENCODED = "hex:";
+
+        private const int DEFAULT_TIMEOUT = 2000;
+
+        private const string EMPTY_RESPONSE = "-";
 
 		private HttpListener listener;
 
+        private bool connected = false;
+
 		private SerialPort port;
+
+        private Framing framing;
 
 		private CancellationTokenSource cancellationTokenSource;
 
-		private MemoryStream buffer;
+        private string query;
 
-		private string header;
+        private string testResponse;
 
-		private string end;
-
-		private StreamWriter writer;
-
-		public Listener()
+        public Listener()
 		{
 		}
 
@@ -52,15 +62,6 @@ namespace SerialToHttpPoC
 			listener = new HttpListener();
 			listener.Prefixes.Add(prefix);
 			listener.Start();
-
-			buffer = new MemoryStream();
-			writer = new StreamWriter(buffer);
-
-			header = GetProperty(HEADER_KEY, DEFAULT_HEADER);
-			end = GetProperty(END_KEY, DEFAULT_END);
-
-			port = CreatePort();
-			port.Open();
 
 			cancellationTokenSource = new CancellationTokenSource();
 			ThreadPool.QueueUserWorkItem(new WaitCallback(Listen), cancellationTokenSource.Token);
@@ -76,7 +77,7 @@ namespace SerialToHttpPoC
 				string responseString = Query();
 				if (string.IsNullOrEmpty(responseString))
 				{
-					responseString = "No hay datos";
+					responseString = EMPTY_RESPONSE;
 				}
 				byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseString);
 				HttpListenerResponse response = context.Response;
@@ -87,62 +88,92 @@ namespace SerialToHttpPoC
 			}
 		}
 
+        private void Connect()
+        {
+            string header = GetProperty(HEADER_KEY, DEFAULT_HEADER);
+            string terminator = GetProperty(TERMINATOR_KEY, DEFAULT_TERMINATOR);
+            query = GetProperty(QUERY_KEY, DEFAULT_QUERY);
+
+            port = CreatePort();
+            if (port != null)
+            {
+                // real serial port
+                port.Open();
+
+                // framing handler
+                framing = new Framing(port, header, terminator, DEFAULT_TIMEOUT);
+            }
+            else
+            {
+                // emulation mode
+                testResponse = GetProperty(TEST_RESPONSE_KEY, DEFAULT_TEST_RESPONSE);
+            }
+            connected = true;
+        }
+
 		private string Query()
 		{
-			// Primero mandamos el comando para pedir los datos.
-			string query = GetProperty(QUERY_KEY, DEFAULT_QUERY);
-			port.Write(query);
-
-			// Ahora leemos el frame delimitado.
-			return Framing.Read(buffer, header, end, 10000);
+            if (!connected)
+            {
+                // deferred connection to serial port
+                Connect();
+            }
+            string res;
+            if (port != null)
+            {
+                // real serial port
+                port.Write(query);
+                res = framing.Read();
+            }
+            else
+            {
+                // emulation mode
+                res = testResponse;
+            }
+            return res;
 		}
 
 		private SerialPort CreatePort()
 		{
-			SerialPort port = new SerialPort(GetProperty(PORT_NAME_KEY, DEFAULT_PORT_NAME));
+            SerialPort port = null;
 
-			string property = GetProperty(BAUD_RATE_KEY);
-			if (!string.IsNullOrEmpty(property))
-			{
-				port.BaudRate = int.Parse(property);
-			}
+            string portName = GetProperty(PORT_NAME_KEY, DEFAULT_PORT_NAME);
+            if (!portName.Equals(TEST_PORT_NAME))
+            {
+                port = new SerialPort(portName);
 
-			property = GetProperty(PARITY_KEY);
-			if (!string.IsNullOrEmpty(property))
-			{
+                string property = GetProperty(BAUD_RATE_KEY);
+                if (!string.IsNullOrEmpty(property))
+                {
+                    port.BaudRate = int.Parse(property);
+                }
 
-				port.Parity = (Parity)Enum.Parse(typeof(Parity), property);
-			}
+                property = GetProperty(PARITY_KEY);
+                if (!string.IsNullOrEmpty(property))
+                {
 
-			property = GetProperty(DATA_BITS_KEY);
-			if (!string.IsNullOrEmpty(property))
-			{
-				port.DataBits = int.Parse(property);
-			}
+                    port.Parity = (Parity)Enum.Parse(typeof(Parity), property);
+                }
 
-			property = GetProperty(STOP_BITS_KEY);
-			if (!string.IsNullOrEmpty(property))
-			{
-				port.StopBits = (StopBits)Enum.Parse(typeof(StopBits), property);
-			}
+                property = GetProperty(DATA_BITS_KEY);
+                if (!string.IsNullOrEmpty(property))
+                {
+                    port.DataBits = int.Parse(property);
+                }
 
-			property = GetProperty(HAND_SHAKE_KEY);
-			if (!string.IsNullOrEmpty(property))
-			{
-				port.Handshake = (Handshake)Enum.Parse(typeof(Handshake), property);
-			}
+                property = GetProperty(STOP_BITS_KEY);
+                if (!string.IsNullOrEmpty(property))
+                {
+                    port.StopBits = (StopBits)Enum.Parse(typeof(StopBits), property);
+                }
 
-			port.DataReceived += new SerialDataReceivedEventHandler(DataReceived);
+                property = GetProperty(HAND_SHAKE_KEY);
+                if (!string.IsNullOrEmpty(property))
+                {
+                    port.Handshake = (Handshake)Enum.Parse(typeof(Handshake), property);
+                }
+            }
 			return port;
-		}
-
-		private void DataReceived(object sender, SerialDataReceivedEventArgs e)
-		{
-			long position = buffer.Position;
-			string data = port.ReadExisting();
-			writer.Write(data);
-			writer.Flush();
-			buffer.Seek(position, SeekOrigin.Begin);
 		}
 
 		public void Stop()
@@ -152,8 +183,11 @@ namespace SerialToHttpPoC
 				cancellationTokenSource.Cancel();
 				listener.Stop();
 				listener = null;
-				port.Close();
-				port = null;
+                if (port != null)
+                {
+                    port.Close();
+                    port = null;
+                }
 			}
 		}
 
@@ -164,12 +198,16 @@ namespace SerialToHttpPoC
 			{
 				value = defaultValue;
 			}
+            if (value != null && value.StartsWith(HEX_ENCODED))
+            {
+                value = StringUtils.DecodeHex(value.Substring(HEX_ENCODED.Length));
+            }
 			return value;
 		}
 
-		private static string GetProperty(string key)
+        private static string GetProperty(string key)
 		{
 			return GetProperty(key, null);
 		}
-	}
+    }
 }

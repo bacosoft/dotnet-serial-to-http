@@ -1,171 +1,179 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Ports;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace SerialToHttpPoC
+namespace SerialToHttp
 {
     public sealed class Framing
     {
-        private enum Estado
+        private enum State
         {
-            ESPERANDO_ENCABEZADO,
-            LEYENDO_ENCABEZADO,
-            ESPERANDO_TERMINADOR,
-            LEYENDO_TERMINADOR,
-            MENSAJE_LEIDO
+            WAITING_HEADER,
+            READING_HEADER,
+            WAITING_TERMINATOR,
+            READING_TERMINATOR,
+            MESSAGE_READ
         }
 
-        private const int DEFAULT_TRIES = 3;
+        private const int TIMEOUT_FRACTIONS = 10;
 
-        private const int FRACTIONS_PER_TRY = 10;
+        private const int MIN_TIMEOUT = 50;
 
-        private static int intentos = DEFAULT_TRIES;
+        private SerialPort port;
 
-        private Framing()
+        private String header;
+
+        private String terminator;
+
+        private int headerLen;
+
+        private int terminatorLen;
+
+        private int timeout;
+
+        private bool console;
+
+        public Framing(SerialPort port, String header, String terminator, int timeout)
         {
+            headerLen = header.Length;
+            terminatorLen = terminator.Length;
+            if (headerLen == 0 || terminatorLen == 0)
+            {
+                throw new ArgumentException("Neither Header nor terminator cannot be empty!");
+            }
+
+            if (timeout < 0)
+            {
+                timeout = 0;
+            }
+            timeout /= TIMEOUT_FRACTIONS;
+            if (timeout < MIN_TIMEOUT)
+            {
+                timeout = MIN_TIMEOUT;
+            }
+
+            this.port = port;
+            this.header = header;
+            this.terminator = terminator;
+            this.timeout = timeout;
+            this.console = Environment.UserInteractive;
         }
 
-		static int Tries
-        {
-			get { return intentos; }
-			set { intentos = value;  }
-        }
-
-		public static String Read(Stream input, String header, String end, int timeout)
+		public String Read()
 		{
-			if (intentos == 0) 
-			{
-				intentos = DEFAULT_TRIES;
-			}
+            port.ReadTimeout = timeout;
 
-			StringBuilder buffer = new StringBuilder();
-			int largoEncabezado = header.Length;
-			int largoTerminador = end.Length;
-			if (largoEncabezado == 0 || largoTerminador == 0)
+            StringBuilder buffer = new StringBuilder();
+			State state = State.WAITING_HEADER;
+			int index;
+			int byteRead;
+            char charRead;
+            bool headerStart;
+			for (int i = 0; i < TIMEOUT_FRACTIONS && state != State.MESSAGE_READ; i++)
 			{
-				throw new ArgumentException("El header y el end del mensaje no pueden ser vacíos.");
-			}
+                try
+                {
+                    while (state != State.MESSAGE_READ && (byteRead = port.ReadByte()) > -1)
+                    {
+                        charRead = (char) byteRead;
 
-			// ya no salimos antes porque en el primer intento no llegue el header
-			// pero puedo tener llamadores que me pasan el timeout en negativo así que
-			// aquí lo dejo positivo. enrico. 21/11/17.
-			if (timeout < 0)
-			{
-				timeout = -timeout;
-			}
+                        if (console)
+                        {
+                            System.Console.WriteLine("New char received: " + charRead + "\tAscii value = " + (int)charRead);
+                        }
 
-			// como vamos a intentar 10 veces en completar el mensaje con lo que venga desde
-			// la corriente de datos entonces vamos a ir esperando timeout / 10 cada vez.
-			int miniTimeout = timeout / FRACTIONS_PER_TRY;
-			if (miniTimeout < 10)
-			{
-				miniTimeout = 0;
-			}
+                        headerStart = charRead == header[0];
+                        if (headerStart && state != State.WAITING_HEADER)
+                        {
+                            buffer = new StringBuilder();
+                            state = State.WAITING_HEADER;
+                        }
 
-			Estado estado = Estado.ESPERANDO_ENCABEZADO;
-			int indice;
-			char letra;
-			int dato;
-			bool inicioEncabezado;
-			for (int i = 0; i < FRACTIONS_PER_TRY * intentos && estado != Estado.MENSAJE_LEIDO; i++)
-			{
-				while (estado != Estado.MENSAJE_LEIDO && (dato = input.ReadByte()) > -1)
+                        switch (state)
+                        {
+                            case State.WAITING_HEADER:
+                                // simplemente cuando encontramos el primer caracter del header
+                                // nos pasaremos al estado leyendo header. 
+                                if (headerStart)
+                                {
+                                    if (headerLen > 1)
+                                    {
+                                        state = State.READING_HEADER;
+                                    }
+                                    else
+                                    {
+                                        state = State.WAITING_TERMINATOR;
+                                    }
+                                    buffer.Append(charRead);
+                                }
+                                break;
+
+                            case State.READING_HEADER:
+                                // salimos de este estado solo cuando encontremos en la corriente de datos 
+                                // el header completo. cuando pasamos al estado esperando end 
+                                // quitamos la parte inicial del buffer que puede estar sobrando.
+                                buffer.Append(charRead);
+                                index = buffer.ToString().IndexOf(header);
+                                if (index >= 0)
+                                {
+                                    state = State.WAITING_TERMINATOR;
+                                    if (index > 0)
+                                    {
+                                        buffer.Remove(0, index);
+                                    }
+                                }
+                                break;
+
+                            case State.WAITING_TERMINATOR:
+                                // en este momento buscamos la primer letra del end.
+                                buffer.Append(charRead);
+                                if (charRead == terminator[0])
+                                {
+                                    if (terminatorLen > 1)
+                                    {
+                                        state = State.READING_TERMINATOR;
+                                    }
+                                    else
+                                    {
+                                        state = State.MESSAGE_READ;
+                                    }
+                                }
+                                break;
+
+                            case State.READING_TERMINATOR:
+                                // salimos de este estado solo cuando encontremos en la corriente de datos
+                                // el end completo. notar que estoy buscando el end a partir
+                                // del caracter que viene a continuación del header.
+                                buffer.Append(charRead);
+                                index = buffer.ToString().LastIndexOf(terminator);
+                                if (index >= headerLen)
+                                {
+                                    state = State.MESSAGE_READ;
+                                }
+                                break;
+
+                            default:
+                                break;
+                        }
+                    }
+                }
+                catch (TimeoutException)
+                {
+                    // next try
+                }
+				catch (ThreadInterruptedException)
 				{
-					letra = (char)dato;
-
-					inicioEncabezado = letra == header[0];
-					if (inicioEncabezado && estado != Estado.ESPERANDO_ENCABEZADO)
-					{
-						buffer = new StringBuilder();
-						estado = Estado.ESPERANDO_ENCABEZADO;
-					}
-
-					switch (estado)
-					{
-						case Estado.ESPERANDO_ENCABEZADO:
-							// simplemente cuando encontramos el primer caracter del header
-							// nos pasaremos al estado leyendo header. 
-							if (inicioEncabezado)
-							{
-								if (largoEncabezado > 1)
-								{
-									estado = Estado.LEYENDO_ENCABEZADO;
-								}
-								else
-								{
-									estado = Estado.ESPERANDO_TERMINADOR;
-								}
-								buffer.Append(letra);
-							}
-							break;
-
-						case Estado.LEYENDO_ENCABEZADO:
-							// salimos de este estado solo cuando encontremos en la corriente de datos 
-							// el header completo. cuando pasamos al estado esperando end 
-							// quitamos la parte inicial del buffer que puede estar sobrando.
-							buffer.Append(letra);
-							indice = buffer.ToString().IndexOf(header);
-							if (indice >= 0)
-							{
-								estado = Estado.ESPERANDO_TERMINADOR;
-								if (indice > 0)
-								{
-									buffer.Remove(0, indice);
-								}
-							}
-							break;
-
-						case Estado.ESPERANDO_TERMINADOR:
-							// en este momento buscamos la primer letra del end.
-							buffer.Append(letra);
-							if (letra == end[0])
-							{
-								if (largoTerminador > 1)
-								{
-									estado = Estado.LEYENDO_TERMINADOR;
-								}
-								else
-								{
-									estado = Estado.MENSAJE_LEIDO;
-								}
-							}
-							break;
-
-						case Estado.LEYENDO_TERMINADOR:
-							// salimos de este estado solo cuando encontremos en la corriente de datos
-							// el end completo. notar que estoy buscando el end a partir
-							// del caracter que viene a continuación del header.
-							buffer.Append(letra);
-							indice = buffer.ToString().LastIndexOf(end);
-							if (indice >= largoEncabezado)
-							{
-								estado = Estado.MENSAJE_LEIDO;
-							}
-							break;
-
-						default:
-							break;
-					}
-				}
-				if (miniTimeout > 0 && estado != Estado.MENSAJE_LEIDO)
-				{
-					try
-					{
-						Thread.Sleep(miniTimeout);
-					}
-					catch (ThreadInterruptedException)
-					{
-						Thread.CurrentThread.Interrupt();
-						break;
-					}
+					Thread.CurrentThread.Interrupt();
+					break;
 				}
 			}
 
-			return (estado == Estado.MENSAJE_LEIDO) ? buffer.ToString() : null; 
+            return (state == State.MESSAGE_READ) ? buffer.ToString() : null; 
 		}
     }
 }

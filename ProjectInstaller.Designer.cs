@@ -1,5 +1,5 @@
 ﻿
-namespace SerialToHttpPoC
+namespace SerialToHttp
 {
     partial class ProjectInstaller
     {
@@ -40,7 +40,10 @@ namespace SerialToHttpPoC
             // 
             // serviceInstaller
             // 
-            this.serviceInstaller.ServiceName = "SerialToHttpPoC";
+            this.serviceInstaller.ServiceName = "Serial port To HTTP service";
+            this.serviceInstaller.Description = "Exposes serial port through HTTP";
+            this.serviceInstaller.StartType = System.ServiceProcess.ServiceStartMode.Automatic;
+            this.serviceInstaller.DelayedAutoStart = true;
             // 
             // ProjectInstaller
             // 
