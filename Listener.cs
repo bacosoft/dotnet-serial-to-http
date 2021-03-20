@@ -3,13 +3,17 @@ using System.Configuration;
 using System.IO;
 using System.IO.Ports;
 using System.Net;
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace SerialToHttp
 {
 	public class Listener
 	{
-		private const string URL_PREFIX_KEY = "urlPrefix";
+        private const string CONTENT_TYPE = "text/plain; charset=utf-8";
+
+        private const string URL_PREFIX_KEY = "urlPrefix";
 		private const string DEFAULT_URL_PREFIX = "http://localhost:8080/serialToHttp/";
 
         private const string TEST_PORT_NAME = "test";
@@ -27,7 +31,10 @@ namespace SerialToHttp
 		private const string QUERY_KEY = "query";
 		private const string DEFAULT_QUERY = "query";
 
-		private const string HEADER_KEY = "header";
+        private const string PATTERN_KEY = "pattern";
+        private const string SUBSTITUTION_KEY = "substitution";
+
+        private const string HEADER_KEY = "header";
 		private const string DEFAULT_HEADER = "[";
 		private const string TERMINATOR_KEY = "terminator";
 		private const string DEFAULT_TERMINATOR = "]";
@@ -35,8 +42,6 @@ namespace SerialToHttp
         private const string HEX_ENCODED = "hex:";
 
         private const int DEFAULT_TIMEOUT = 2000;
-
-        private const string EMPTY_RESPONSE = "-";
 
 		private HttpListener listener;
 
@@ -51,6 +56,10 @@ namespace SerialToHttp
         private string query;
 
         private string testResponse;
+
+        private Regex regex;
+
+        private string substitution;
 
         public Listener()
 		{
@@ -69,30 +78,62 @@ namespace SerialToHttp
 
 		private void Listen(object obj)
 		{
-			CancellationToken token = (CancellationToken)obj;
-
+			CancellationToken token = (CancellationToken) obj;
 			while (!token.IsCancellationRequested)
 			{
-				HttpListenerContext context = listener.GetContext();
-				string responseString = Query();
-				if (string.IsNullOrEmpty(responseString))
-				{
-					responseString = EMPTY_RESPONSE;
-				}
-				byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseString);
-				HttpListenerResponse response = context.Response;
-				response.ContentLength64 = buffer.Length;
-				Stream output = response.OutputStream;
-				output.Write(buffer, 0, buffer.Length);
-				output.Close();
+                ProcessRequest(listener.GetContext());
 			}
 		}
+
+        private void ProcessRequest(HttpListenerContext context)
+        {
+            HttpStatusCode code;
+            string message;
+            try
+            {
+                message = Query();
+                if (message != null)
+                {
+                    code = HttpStatusCode.OK;
+                }
+                else
+                {
+                    // nothing read after a while, returning 404 instead of 500
+                    message = "";
+                    code = HttpStatusCode.NotFound;
+                }
+            }
+            catch (Exception e)
+            {
+                message = e.Message + "\n\n" + e.StackTrace;
+                code = HttpStatusCode.InternalServerError;
+            }
+            WriteResponse(context.Response, code, message);
+        }
+
+        private void WriteResponse(HttpListenerResponse response, HttpStatusCode code, string message)
+        {
+            byte[] buffer = System.Text.Encoding.UTF8.GetBytes(message);
+            response.StatusCode = (int) code;
+            response.ContentLength64 = buffer.Length;
+            response.ContentType = CONTENT_TYPE;
+            Stream output = response.OutputStream;
+            output.Write(buffer, 0, buffer.Length);
+            output.Close();
+        }
 
         private void Connect()
         {
             string header = GetProperty(HEADER_KEY, DEFAULT_HEADER);
             string terminator = GetProperty(TERMINATOR_KEY, DEFAULT_TERMINATOR);
             query = GetProperty(QUERY_KEY, DEFAULT_QUERY);
+
+            String pattern = GetProperty(PATTERN_KEY);
+            if (pattern != null)
+            {
+                regex = new Regex(pattern, RegexOptions.Compiled);
+                substitution = GetProperty(SUBSTITUTION_KEY);
+            }
 
             port = CreatePort();
             if (port != null)
@@ -111,7 +152,8 @@ namespace SerialToHttp
             connected = true;
         }
 
-		private string Query()
+        [MethodImpl(MethodImplOptions.Synchronized)]
+        private string Query()
 		{
             if (!connected)
             {
@@ -129,6 +171,17 @@ namespace SerialToHttp
             {
                 // emulation mode
                 res = testResponse;
+            }
+            if (regex != null)
+            {
+                if (!regex.IsMatch(res))
+                {
+                    throw new ArgumentException("Invalid value: " + res);
+                }
+                else
+                {
+                    res = regex.Replace(res, substitution);
+                }
             }
             return res;
 		}
